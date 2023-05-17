@@ -74,17 +74,17 @@ class TimeMixer(torch.nn.Module):
 
         x = F.layer_norm(x, (1024, ), weight=self.ln_weight, bias=self.ln_bias)
 
-        xk = x * self.time_mix_k + state[5 * i + 1].flatten() * (1 - self.time_mix_k)
-        xv = x * self.time_mix_v + state[5 * i + 1].flatten() * (1 - self.time_mix_v)
-        xr = x * self.time_mix_r + state[5 * i + 1].flatten() * (1 - self.time_mix_r)
-        state[5 * i + 1] = x
+        xk = x * self.time_mix_k + state[1].flatten() * (1 - self.time_mix_k)
+        xv = x * self.time_mix_v + state[1].flatten() * (1 - self.time_mix_v)
+        xr = x * self.time_mix_r + state[1].flatten() * (1 - self.time_mix_r)
+        # state[1] = x
         r = torch.sigmoid(self.rw @ xr)
         k = self.kw @ xk
         v = self.vw @ xv
 
-        aa = state[5 * i + 2].flatten()
-        bb = state[5 * i + 3].flatten()
-        pp = state[5 * i + 4].flatten()
+        aa = state[2].flatten()
+        bb = state[3].flatten()
+        pp = state[4].flatten()
         ww = self.time_first + k
         qq = torch.maximum(pp, ww)
         e1 = torch.exp(pp - qq)
@@ -96,9 +96,9 @@ class TimeMixer(torch.nn.Module):
         qq = torch.maximum(ww, k)
         e1 = torch.exp(ww - qq)
         e2 = torch.exp(k - qq)
-        state[5 * i + 2] = e1 * aa + e2 * v
-        state[5 * i + 3] = e1 * bb + e2
-        state[5 * i + 4] = qq
+        # state[5 * i + 2] = e1 * aa + e2 * v
+        # state[5 * i + 3] = e1 * bb + e2
+        # state[5 * i + 4] = qq
         return y + (self.ow @ (r * wkv))
 
 
@@ -223,10 +223,10 @@ class RWKV_RNN(torch.jit.ScriptModule):
             token = torch.full([1], tokenid, dtype=torch.int32)
 
             x = self.encoder.forward(token)
-            # onnx_inputs = [token]
+            # onnx_inputs = (token)
             # onnx_filepath = 'encode.onnx'
-            # onnx_inp_names = ['token']
-            # onnx_out_names = ['feature']
+            # onnx_inp_names = ('token')
+            # onnx_out_names = ('feature')
             # torch.onnx.export(model=self.encoder, args=onnx_inputs, f=onnx_filepath, verbose=False, input_names=onnx_inp_names, output_names=onnx_out_names, opset_version=16)
 
             for i in range(self.args.n_layer):
@@ -240,14 +240,18 @@ class RWKV_RNN(torch.jit.ScriptModule):
 
                 time_mixer = TimeMixer(att.time_mix_k, att.time_mix_v, att.time_mix_r, att.time_first, att.time_decay, att.key.weight, att.value.weight, att.receptance.weight, att.output.weight, ln1.weight, ln1.bias)
                 
-                # onnx_inputs = [x, state, itensor]
-                # onnx_filepath = 'time_mixing_{}.onnx'.format(i)
-                # onnx_inp_names = ['input', 'state', 'i']
-                # onnx_out_names = ['feature']
-                # import pdb
-                # pdb.set_trace()
-                # torch.onnx.export(model=time_mixer, args=[x, state, itensor], f=onnx_filepath, verbose=False, input_names=onnx_inp_names, output_names=onnx_out_names, opset_version=16)
-                x = time_mixer.forward(x, state, itensor)
+
+                state_slice = state[5*i : 5*(i+1)]
+
+                onnx_inputs = (x, state, itensor)
+                onnx_filepath = 'time_mixing_{}.onnx'.format(i)
+                onnx_inp_names = ('input', 'state_slice')
+                onnx_out_names = ('feature')
+                import pdb
+                pdb.set_trace()
+                torch.onnx.export(model=time_mixer, args=onnx_inputs, f=onnx_filepath, verbose=False, input_names=onnx_inp_names, output_names=onnx_out_names, opset_version=16)
+
+                x = time_mixer.forward(x, state_slice)
 
                 ffn = self.w.blocks[i].ffn
                 ln2 = self.w.blocks[i].ln2
